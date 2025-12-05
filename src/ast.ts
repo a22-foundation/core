@@ -1,11 +1,12 @@
-export type NodeType = 
-  | "Program" 
-  | "Block" 
-  | "Attribute" 
-  | "Literal" 
-  | "Reference" 
-  | "List" 
-  | "Map";
+export type NodeType =
+  | "Program"
+  | "Block"
+  | "Attribute"
+  | "Literal"
+  | "Reference"
+  | "List"
+  | "Map"
+  | "BlockExpression";
 
 export interface Node {
   kind: NodeType;
@@ -37,11 +38,19 @@ export interface Attribute extends Node {
   value: Expression;
 }
 
-export type Expression = 
-  | Literal 
-  | Reference 
-  | ListExpression 
-  | MapExpression;
+export type Expression =
+  | Literal
+  | Reference
+  | ListExpression
+  | MapExpression
+  | BlockExpression;
+
+export interface BlockExpression extends Node {
+  kind: "BlockExpression";
+  type: string;
+  identifier?: string;
+  body: Block;
+}
 
 export interface Literal extends Node {
   kind: "Literal";

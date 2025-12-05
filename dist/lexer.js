@@ -11,7 +11,8 @@ export var TokenType;
     TokenType[TokenType["Equals"] = 8] = "Equals";
     TokenType[TokenType["Dot"] = 9] = "Dot";
     TokenType[TokenType["Comma"] = 10] = "Comma";
-    TokenType[TokenType["EOF"] = 11] = "EOF";
+    TokenType[TokenType["Colon"] = 11] = "Colon";
+    TokenType[TokenType["EOF"] = 12] = "EOF";
 })(TokenType || (TokenType = {}));
 export class Lexer {
     constructor(input) {
@@ -53,6 +54,7 @@ export class Lexer {
             case '=': return this.advanceToken(TokenType.Equals, "=");
             case '.': return this.advanceToken(TokenType.Dot, ".");
             case ',': return this.advanceToken(TokenType.Comma, ",");
+            case ':': return this.advanceToken(TokenType.Colon, ":");
         }
         throw new Error(`Unexpected character '${char}' at ${this.line}:${this.col}`);
     }

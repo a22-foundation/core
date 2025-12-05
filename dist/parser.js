@@ -22,7 +22,15 @@ export class A22Parser {
         }
         // If neither, identifier is empty (anonymous block like 'inputs')
         let label;
-        // Check for optional second label if needed
+        // Optional Label implementation
+        if (identifier !== "" && (this.check(TokenType.String) || this.check(TokenType.Identifier))) {
+            if (this.match(TokenType.String)) {
+                label = this.previous().value;
+            }
+            else {
+                label = this.advance().value;
+            }
+        }
         this.consume(TokenType.OpenBrace, "Expect '{' after block header.");
         const attributes = [];
         const children = [];
@@ -30,7 +38,7 @@ export class A22Parser {
             // Heuristic: If it looks like `key = val` it's an attribute.
             // If it looks like `type "name" {` it's a nested block.
             // Lookahead
-            if (this.check(TokenType.Identifier) && this.checkNext(TokenType.Equals)) {
+            if (this.check(TokenType.Identifier) && (this.checkNext(TokenType.Equals) || this.checkNext(TokenType.Colon))) {
                 attributes.push(this.parseAttribute());
             }
             else if (this.check(TokenType.Identifier)) {
@@ -53,7 +61,12 @@ export class A22Parser {
     }
     parseAttribute() {
         const key = this.consume(TokenType.Identifier, "Expect attribute key.").value;
-        this.consume(TokenType.Equals, "Expect '=' after attribute key.");
+        if (this.match(TokenType.Colon)) {
+            // consumed colon
+        }
+        else {
+            this.consume(TokenType.Equals, "Expect '=' or ':' after attribute key.");
+        }
         const value = this.parseExpression();
         return { kind: "Attribute", key, value };
     }
@@ -68,9 +81,19 @@ export class A22Parser {
             return this.parseList();
         if (this.match(TokenType.OpenBrace))
             return this.parseMap();
-        // References: tool.search or agent.name.attr
+        // References: tool.search
+        // OR BlockExpression: tool "name" { ... }
         if (this.check(TokenType.Identifier)) {
-            return this.parseReference();
+            // Lookahead to distinguish Reference (dot) from BlockExpr (string or brace)
+            if (this.checkNext(TokenType.Dot)) {
+                return this.parseReference();
+            }
+            // It might be a BlockExpression (constructor)
+            if (this.checkNext(TokenType.String) || this.checkNext(TokenType.OpenBrace)) {
+                return this.parseBlockExpression();
+            }
+            // Simple identifier reference
+            return this.parseReference(); // single identifier ref
         }
         throw this.error(this.peek(), "Expect expression.");
     }
@@ -87,19 +110,59 @@ export class A22Parser {
     parseMap() {
         const properties = [];
         if (!this.check(TokenType.CloseBrace)) {
-            // In HCL map: key = value. Newlines are separators usually but we treat comma or just repeated pairs
-            // For simplicity, let's assume comma or just loop
             while (!this.check(TokenType.CloseBrace) && !this.isAtEnd()) {
+                // In A22, maps can be simple `a = 1` or `a: 1`
                 const key = this.consume(TokenType.Identifier, "Expect map key.").value;
-                this.consume(TokenType.Equals, "Expect '='.");
+                if (this.match(TokenType.Colon)) {
+                    // ok
+                }
+                else {
+                    this.consume(TokenType.Equals, "Expect '=' or ':'");
+                }
                 const value = this.parseExpression();
                 properties.push({ key, value });
-                // Optional comma
                 this.match(TokenType.Comma);
             }
         }
         this.consume(TokenType.CloseBrace, "Expect '}' after map.");
         return { kind: "Map", properties };
+    }
+    parseBlockExpression() {
+        // We already know it starts with Identifier
+        const type = this.consume(TokenType.Identifier, "Expect block type").value;
+        let identifier;
+        if (this.match(TokenType.String)) {
+            identifier = this.previous().value;
+        }
+        // Parse the body as a Block, but we need to return BlockExpression
+        // Reuse parseBlock logic? parseBlock expects `type` to be current... 
+        // Actually `parseBlock` consumes type.
+        // Let's manually parse the body.
+        this.consume(TokenType.OpenBrace, "Expect '{'");
+        // Use a dummy block to reuse attribute parsing logic or allow standard block body?
+        // Standard block body: attributes or nested blocks.
+        const attributes = [];
+        const children = [];
+        while (!this.check(TokenType.CloseBrace) && !this.isAtEnd()) {
+            if (this.check(TokenType.Identifier) && (this.checkNext(TokenType.Equals) || this.checkNext(TokenType.Colon))) {
+                attributes.push(this.parseAttribute());
+            }
+            else if (this.check(TokenType.Identifier)) {
+                children.push(this.parseBlock());
+            }
+            else {
+                throw this.error(this.peek(), "Expect attribute or nested block.");
+            }
+        }
+        this.consume(TokenType.CloseBrace, "Expect '}'");
+        return {
+            kind: "BlockExpression",
+            type,
+            identifier,
+            body: {
+                kind: "Block", type, identifier: identifier || "", attributes, children
+            }
+        };
     }
     parseReference() {
         const path = [];

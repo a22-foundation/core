@@ -10,6 +10,7 @@ export enum TokenType {
     Equals,       // =
     Dot,          // .
     Comma,        // ,
+    Colon,        // :
     EOF
 }
 
@@ -70,6 +71,7 @@ export class Lexer {
             case '=': return this.advanceToken(TokenType.Equals, "=");
             case '.': return this.advanceToken(TokenType.Dot, ".");
             case ',': return this.advanceToken(TokenType.Comma, ",");
+            case ':': return this.advanceToken(TokenType.Colon, ":");
         }
 
         throw new Error(`Unexpected character '${char}' at ${this.line}:${this.col}`);
