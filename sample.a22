@@ -1,0 +1,15 @@
+var "model" {
+  default = "gpt-4"
+}
+
+tool "web_search" {
+  source = "std/search"
+  inputs {
+    query = string
+  }
+}
+
+agent "researcher" {
+  model = "gpt-4"
+  tools = [tool.web_search]
+}
