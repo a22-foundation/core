@@ -12,6 +12,7 @@ export declare class A22Parser {
     private parseMap;
     private parseBlockExpression;
     private parseReference;
+    private validateNotCredential;
     private match;
     private check;
     private checkNext;

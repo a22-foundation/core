@@ -71,8 +71,12 @@ export class A22Parser {
         return { kind: "Attribute", key, value };
     }
     parseExpression() {
-        if (this.match(TokenType.String))
-            return { kind: "Literal", value: this.previous().value, raw: `"${this.previous().value}"` };
+        if (this.match(TokenType.String)) {
+            const value = this.previous().value;
+            // Security: Validate that strings don't contain literal credentials
+            this.validateNotCredential(value);
+            return { kind: "Literal", value, raw: `"${value}"` };
+        }
         if (this.match(TokenType.Number))
             return { kind: "Literal", value: parseFloat(this.previous().value), raw: this.previous().value };
         if (this.match(TokenType.Boolean))
@@ -171,6 +175,26 @@ export class A22Parser {
             path.push(this.consume(TokenType.Identifier, "Expect identifier after dot.").value);
         }
         return { kind: "Reference", path };
+    }
+    // Security validation
+    validateNotCredential(value) {
+        // Check for common credential patterns
+        const credentialPatterns = [
+            /^sk-/i, // OpenAI/Stripe style: sk-...
+            /^api_/i, // Common API key prefix
+            /^key_/i, // Common key prefix
+            /^secret_/i, // Common secret prefix
+            /^token_/i, // Common token prefix
+            /^Bearer /i, // Bearer tokens
+            /^[A-Za-z0-9_-]{32,}$/, // Long alphanumeric strings (likely keys)
+        ];
+        for (const pattern of credentialPatterns) {
+            if (pattern.test(value)) {
+                throw new Error(`Security Error: Literal credential detected. ` +
+                    `Use environment references (env.VAR_NAME) or secrets references (secrets.KEY_NAME) instead. ` +
+                    `Never include literal API keys or secrets in .a22 files.`);
+            }
+        }
     }
     // Helpers
     match(type) {

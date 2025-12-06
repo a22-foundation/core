@@ -1,8 +1,57 @@
 import { Program } from './ast.js';
+import * as IR from './ir.js';
 export declare class Validator {
+    private blockIds;
+    private providers;
+    private policies;
+    private tools;
+    private workflows;
+    private capabilities;
     validate(program: Program): string[];
+    private validateBlock;
+    private validateProvider;
+    private validatePolicy;
+    private validateAgent;
+    private validateModelConfig;
+    private validateIsolation;
+    private validateTool;
+    private findAttribute;
+    private findChildBlock;
+    private extractLiteralValue;
 }
 export declare class Transpiler {
-    toIR(program: Program): any;
+    toIR(program: Program): IR.A22IR;
+    private transformAgent;
+    private transformModelConfig;
+    private extractModelProviderConfig;
+    private transformIsolation;
+    private transformTool;
+    private transformToolSchema;
+    private transformToolSecurity;
+    private transformValidationRules;
+    private transformSandbox;
+    private transformOutputValidation;
+    private transformWorkflow;
+    private transformProvider;
+    private transformCredentialReference;
+    private transformRateLimits;
+    private transformPolicy;
+    private transformPolicyAllow;
+    private transformPolicyDeny;
+    private transformResourceLimits;
+    private transformCapability;
+    private transformCapabilityRequirements;
+    private extractPermission;
+    private transformCapabilityGrants;
+    private transformTemplate;
+    private transformConfig;
+    private transformDataType;
+    private extractString;
+    private extractNumber;
+    private extractValue;
+    private extractReference;
+    private extractStringArray;
+    private extractMap;
+    private extractBlockAsMap;
 }
 export declare function compile(filePath: string): void;
