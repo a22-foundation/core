@@ -2,191 +2,430 @@ import { TokenType } from './lexer.js';
 export class A22Parser {
     constructor(tokens) {
         this.current = 0;
+        // Filter out newlines that are not significant
         this.tokens = tokens;
     }
     parse() {
         const blocks = [];
         while (!this.isAtEnd()) {
-            blocks.push(this.parseBlock());
+            this.skipNewlines();
+            if (!this.isAtEnd()) {
+                blocks.push(this.parseBlock());
+            }
         }
         return { kind: "Program", blocks };
     }
     parseBlock() {
-        const typeToken = this.consume(TokenType.Identifier, "Expect block type."); // e.g. agent
+        // Expect keyword (agent, tool, workflow, etc.)
+        const typeToken = this.consumeKeyword("Expect block type keyword");
+        const type = typeToken.value;
+        // Expect string identifier
         let identifier = "";
         if (this.match(TokenType.String)) {
             identifier = this.previous().value;
         }
-        else if (this.match(TokenType.Identifier)) {
-            identifier = this.previous().value;
-        }
-        // If neither, identifier is empty (anonymous block like 'inputs')
-        let label;
-        // Optional Label implementation
-        if (identifier !== "" && (this.check(TokenType.String) || this.check(TokenType.Identifier))) {
-            if (this.match(TokenType.String)) {
-                label = this.previous().value;
-            }
-            else {
-                label = this.advance().value;
-            }
-        }
-        this.consume(TokenType.OpenBrace, "Expect '{' after block header.");
+        // Expect newline and indent
+        this.consumeNewline();
+        this.consume(TokenType.Indent, "Expect indented block body");
         const attributes = [];
         const children = [];
-        while (!this.check(TokenType.CloseBrace) && !this.isAtEnd()) {
-            // Heuristic: If it looks like `key = val` it's an attribute.
-            // If it looks like `type "name" {` it's a nested block.
-            // Lookahead
-            if (this.check(TokenType.Identifier) && (this.checkNext(TokenType.Equals) || this.checkNext(TokenType.Colon))) {
-                attributes.push(this.parseAttribute());
+        // Parse block body
+        while (!this.check(TokenType.Dedent) && !this.isAtEnd()) {
+            this.skipNewlines();
+            if (this.check(TokenType.Dedent))
+                break;
+            // Check if it's a statement (starts with keyword)
+            if (this.check(TokenType.Keyword)) {
+                const keyword = this.peek().value;
+                // Statement keywords
+                if (['can', 'use', 'do', 'has', 'when', 'prompt', 'state', 'remembers',
+                    'isolation', 'validates', 'sandbox', 'auth', 'steps', 'parallel',
+                    'branch', 'loop', 'return', 'given', 'expect', 'show', 'ask',
+                    'options', 'timeout', 'default', 'allow', 'deny', 'limits',
+                    'every', 'run'].includes(keyword)) {
+                    attributes.push(this.parseStatement());
+                }
+                else {
+                    // Nested block declaration (agent, tool, workflow, etc.)
+                    children.push(this.parseBlock());
+                }
             }
             else if (this.check(TokenType.Identifier)) {
-                children.push(this.parseBlock());
+                // Attribute assignment (name = value or name: value)
+                attributes.push(this.parseAttribute());
             }
             else {
-                // Error or comments
-                throw this.error(this.peek(), "Expect attribute or nested block.");
+                this.skipNewlines();
             }
         }
-        this.consume(TokenType.CloseBrace, "Expect '}' after block body.");
+        this.consume(TokenType.Dedent, "Expect dedent after block body");
         return {
             kind: "Block",
-            type: typeToken.value,
+            type,
             identifier,
-            label: label || undefined,
             attributes,
             children
         };
     }
-    parseAttribute() {
-        const key = this.consume(TokenType.Identifier, "Expect attribute key.").value;
-        if (this.match(TokenType.Colon)) {
-            // consumed colon
+    parseStatement() {
+        const keyword = this.advance().value;
+        switch (keyword) {
+            case 'can':
+                return this.parseCanStatement();
+            case 'use':
+                return this.parseUseStatement();
+            case 'do':
+                return this.parseDoStatement();
+            case 'has':
+                return this.parseHasStatement();
+            case 'when':
+                return this.parseWhenStatement();
+            case 'prompt':
+                return this.parsePromptStatement();
+            case 'state':
+                return this.parseStateStatement();
+            case 'remembers':
+                return this.parseRemembersStatement();
+            default:
+                // Generic statement - parse as attribute
+                return this.parseGenericStatement(keyword);
+        }
+    }
+    parseCanStatement() {
+        // can chat, remember, search
+        const capabilities = [];
+        do {
+            capabilities.push(this.consume(TokenType.Identifier, "Expect capability name").value);
+        } while (this.match(TokenType.Comma));
+        this.skipNewlines();
+        return {
+            kind: "Attribute",
+            key: "can",
+            value: { kind: "List", elements: capabilities.map(c => ({ kind: "Literal", value: c, raw: c })) }
+        };
+    }
+    parseUseStatement() {
+        // use model: :gpt4
+        // use tool: :search
+        // use gateway
+        const uses = [];
+        // Can be multiple uses on same line: use gateway, model: :gpt4
+        do {
+            if (this.check(TokenType.Identifier)) {
+                const name = this.advance().value;
+                if (this.match(TokenType.Colon)) {
+                    // use model: :gpt4
+                    const value = this.parseExpression();
+                    uses.push({ kind: "Map", properties: [{ key: name, value }] });
+                }
+                else {
+                    // use gateway
+                    uses.push({ kind: "Literal", value: name, raw: name });
+                }
+            }
+        } while (this.match(TokenType.Comma));
+        this.skipNewlines();
+        if (uses.length === 1) {
+            return { kind: "Attribute", key: "use", value: uses[0] };
         }
         else {
-            this.consume(TokenType.Equals, "Expect '=' or ':' after attribute key.");
+            return { kind: "Attribute", key: "use", value: { kind: "List", elements: uses } };
         }
+    }
+    parseDoStatement() {
+        // do .content_creation
+        const ref = this.consume(TokenType.Reference, "Expect reference after 'do'").value;
+        this.skipNewlines();
+        return {
+            kind: "Attribute",
+            key: "do",
+            value: { kind: "Reference", path: [ref.substring(1)] } // Remove leading dot
+        };
+    }
+    parseHasStatement() {
+        // has resources, policies
+        // OR has:
+        //     resource: value
+        //     policy: value
+        if (this.check(TokenType.Newline)) {
+            // Block form
+            this.consumeNewline();
+            this.consume(TokenType.Indent, "Expect indent after 'has'");
+            const properties = [];
+            while (!this.check(TokenType.Dedent) && !this.isAtEnd()) {
+                this.skipNewlines();
+                if (this.check(TokenType.Dedent))
+                    break;
+                const key = this.consume(TokenType.Identifier, "Expect property name").value;
+                this.consume(TokenType.Colon, "Expect ':' after property name");
+                const value = this.parseExpression();
+                properties.push({ key, value });
+                this.skipNewlines();
+            }
+            this.consume(TokenType.Dedent, "Expect dedent after 'has' block");
+            return {
+                kind: "Attribute",
+                key: "has",
+                value: { kind: "Map", properties }
+            };
+        }
+        else {
+            // Inline form: has resources, policies
+            const items = [];
+            do {
+                items.push(this.consume(TokenType.Identifier, "Expect item name").value);
+            } while (this.match(TokenType.Comma));
+            this.skipNewlines();
+            return {
+                kind: "Attribute",
+                key: "has",
+                value: { kind: "List", elements: items.map(i => ({ kind: "Literal", value: i, raw: i })) }
+            };
+        }
+    }
+    parseWhenStatement() {
+        // when condition -> action
+        // OR when condition
+        //     action
+        const condition = this.parseExpression();
+        if (this.match(TokenType.Arrow)) {
+            // Inline form
+            const action = this.parseExpression();
+            this.skipNewlines();
+            return {
+                kind: "Attribute",
+                key: "when",
+                value: {
+                    kind: "Map",
+                    properties: [
+                        { key: "condition", value: condition },
+                        { key: "action", value: action }
+                    ]
+                }
+            };
+        }
+        else {
+            // Block form
+            this.consumeNewline();
+            this.consume(TokenType.Indent, "Expect indent after 'when'");
+            // Parse action statements
+            const actions = [];
+            while (!this.check(TokenType.Dedent) && !this.isAtEnd()) {
+                this.skipNewlines();
+                if (this.check(TokenType.Dedent))
+                    break;
+                if (this.check(TokenType.Arrow)) {
+                    this.advance(); // consume ->
+                    actions.push({
+                        kind: "Attribute",
+                        key: "action",
+                        value: this.parseExpression()
+                    });
+                }
+                else {
+                    actions.push(this.parseStatement());
+                }
+                this.skipNewlines();
+            }
+            this.consume(TokenType.Dedent, "Expect dedent after 'when' block");
+            return {
+                kind: "Attribute",
+                key: "when",
+                value: {
+                    kind: "Map",
+                    properties: [
+                        { key: "condition", value: condition },
+                        { key: "actions", value: { kind: "List", elements: actions.map(a => a.value) } }
+                    ]
+                }
+            };
+        }
+    }
+    parsePromptStatement() {
+        // prompt :system
+        //     "You are..."
+        // OR prompt :system "You are..."
+        let symbol;
+        if (this.match(TokenType.Symbol)) {
+            symbol = this.previous().value;
+        }
+        if (this.check(TokenType.String)) {
+            // Inline form
+            const content = this.advance().value;
+            this.skipNewlines();
+            return {
+                kind: "Attribute",
+                key: "prompt",
+                value: {
+                    kind: "Map",
+                    properties: [
+                        { key: "type", value: { kind: "Literal", value: symbol || ":default", raw: symbol || ":default" } },
+                        { key: "content", value: { kind: "Literal", value: content, raw: `"${content}"` } }
+                    ]
+                }
+            };
+        }
+        else {
+            // Block form
+            this.consumeNewline();
+            this.consume(TokenType.Indent, "Expect indent after 'prompt'");
+            const content = this.consume(TokenType.String, "Expect prompt content string").value;
+            this.skipNewlines();
+            this.consume(TokenType.Dedent, "Expect dedent after prompt content");
+            return {
+                kind: "Attribute",
+                key: "prompt",
+                value: {
+                    kind: "Map",
+                    properties: [
+                        { key: "type", value: { kind: "Literal", value: symbol || ":default", raw: symbol || ":default" } },
+                        { key: "content", value: { kind: "Literal", value: content, raw: `"${content}"` } }
+                    ]
+                }
+            };
+        }
+    }
+    parseStateStatement() {
+        // state :persistent
+        //     backend :redis
+        //     ttl 24h
+        const symbol = this.match(TokenType.Symbol) ? this.previous().value : ":default";
+        this.consumeNewline();
+        this.consume(TokenType.Indent, "Expect indent after 'state'");
+        const properties = [];
+        properties.push({ key: "type", value: { kind: "Literal", value: symbol, raw: symbol } });
+        while (!this.check(TokenType.Dedent) && !this.isAtEnd()) {
+            this.skipNewlines();
+            if (this.check(TokenType.Dedent))
+                break;
+            const key = this.consume(TokenType.Identifier, "Expect property name").value;
+            const value = this.parseExpression();
+            properties.push({ key, value });
+            this.skipNewlines();
+        }
+        this.consume(TokenType.Dedent, "Expect dedent after 'state' block");
+        return {
+            kind: "Attribute",
+            key: "state",
+            value: { kind: "Map", properties }
+        };
+    }
+    parseRemembersStatement() {
+        // remembers
+        //     conversation: last 50 messages
+        //     preferences: always
+        this.consumeNewline();
+        this.consume(TokenType.Indent, "Expect indent after 'remembers'");
+        const properties = [];
+        while (!this.check(TokenType.Dedent) && !this.isAtEnd()) {
+            this.skipNewlines();
+            if (this.check(TokenType.Dedent))
+                break;
+            const key = this.consume(TokenType.Identifier, "Expect memory key").value;
+            this.consume(TokenType.Colon, "Expect ':' after memory key");
+            // Parse "last 50 messages" or "always" or "current_session"
+            const value = this.parseExpression();
+            properties.push({ key, value });
+            this.skipNewlines();
+        }
+        this.consume(TokenType.Dedent, "Expect dedent after 'remembers' block");
+        return {
+            kind: "Attribute",
+            key: "remembers",
+            value: { kind: "Map", properties }
+        };
+    }
+    parseGenericStatement(keyword) {
+        // Generic statement - parse rest of line as expression
         const value = this.parseExpression();
-        return { kind: "Attribute", key, value };
+        this.skipNewlines();
+        return {
+            kind: "Attribute",
+            key: keyword,
+            value
+        };
+    }
+    parseAttribute() {
+        const key = this.consume(TokenType.Identifier, "Expect attribute key").value;
+        if (this.match(TokenType.Colon) || this.match(TokenType.Equals)) {
+            const value = this.parseExpression();
+            this.skipNewlines();
+            return { kind: "Attribute", key, value };
+        }
+        throw this.error(this.peek(), "Expect ':' or '=' after attribute key");
     }
     parseExpression() {
+        // Symbol: :name
+        if (this.match(TokenType.Symbol)) {
+            const value = this.previous().value;
+            return { kind: "Literal", value, raw: value };
+        }
+        // Reference: .name
+        if (this.match(TokenType.Reference)) {
+            const value = this.previous().value;
+            return { kind: "Reference", path: [value.substring(1)] }; // Remove leading dot
+        }
+        // String
         if (this.match(TokenType.String)) {
             const value = this.previous().value;
-            // Security: Validate that strings don't contain literal credentials
             this.validateNotCredential(value);
             return { kind: "Literal", value, raw: `"${value}"` };
         }
-        if (this.match(TokenType.Number))
+        // Number
+        if (this.match(TokenType.Number)) {
             return { kind: "Literal", value: parseFloat(this.previous().value), raw: this.previous().value };
-        if (this.match(TokenType.Boolean))
-            return { kind: "Literal", value: this.previous().value === "true", raw: this.previous().value };
-        if (this.match(TokenType.OpenBracket))
-            return this.parseList();
-        if (this.match(TokenType.OpenBrace))
-            return this.parseMap();
-        // References: tool.search
-        // OR BlockExpression: tool "name" { ... }
-        if (this.check(TokenType.Identifier)) {
-            // Lookahead to distinguish Reference (dot) from BlockExpr (string or brace)
-            if (this.checkNext(TokenType.Dot)) {
-                return this.parseReference();
-            }
-            // It might be a BlockExpression (constructor)
-            if (this.checkNext(TokenType.String) || this.checkNext(TokenType.OpenBrace)) {
-                return this.parseBlockExpression();
-            }
-            // Simple identifier reference
-            return this.parseReference(); // single identifier ref
         }
-        throw this.error(this.peek(), "Expect expression.");
+        // Boolean
+        if (this.match(TokenType.Boolean)) {
+            return { kind: "Literal", value: this.previous().value === "true", raw: this.previous().value };
+        }
+        // List: [...]
+        if (this.match(TokenType.OpenBracket)) {
+            return this.parseList();
+        }
+        // Identifier or dotted reference
+        if (this.check(TokenType.Identifier)) {
+            return this.parseReference();
+        }
+        throw this.error(this.peek(), "Expect expression");
     }
     parseList() {
         const elements = [];
         if (!this.check(TokenType.CloseBracket)) {
             do {
+                this.skipNewlines();
+                if (this.check(TokenType.CloseBracket))
+                    break;
                 elements.push(this.parseExpression());
+                this.skipNewlines();
             } while (this.match(TokenType.Comma));
         }
-        this.consume(TokenType.CloseBracket, "Expect ']' after list.");
+        this.consume(TokenType.CloseBracket, "Expect ']' after list");
         return { kind: "List", elements };
-    }
-    parseMap() {
-        const properties = [];
-        if (!this.check(TokenType.CloseBrace)) {
-            while (!this.check(TokenType.CloseBrace) && !this.isAtEnd()) {
-                // In A22, maps can be simple `a = 1` or `a: 1`
-                const key = this.consume(TokenType.Identifier, "Expect map key.").value;
-                if (this.match(TokenType.Colon)) {
-                    // ok
-                }
-                else {
-                    this.consume(TokenType.Equals, "Expect '=' or ':'");
-                }
-                const value = this.parseExpression();
-                properties.push({ key, value });
-                this.match(TokenType.Comma);
-            }
-        }
-        this.consume(TokenType.CloseBrace, "Expect '}' after map.");
-        return { kind: "Map", properties };
-    }
-    parseBlockExpression() {
-        // We already know it starts with Identifier
-        const type = this.consume(TokenType.Identifier, "Expect block type").value;
-        let identifier;
-        if (this.match(TokenType.String)) {
-            identifier = this.previous().value;
-        }
-        // Parse the body as a Block, but we need to return BlockExpression
-        // Reuse parseBlock logic? parseBlock expects `type` to be current... 
-        // Actually `parseBlock` consumes type.
-        // Let's manually parse the body.
-        this.consume(TokenType.OpenBrace, "Expect '{'");
-        // Use a dummy block to reuse attribute parsing logic or allow standard block body?
-        // Standard block body: attributes or nested blocks.
-        const attributes = [];
-        const children = [];
-        while (!this.check(TokenType.CloseBrace) && !this.isAtEnd()) {
-            if (this.check(TokenType.Identifier) && (this.checkNext(TokenType.Equals) || this.checkNext(TokenType.Colon))) {
-                attributes.push(this.parseAttribute());
-            }
-            else if (this.check(TokenType.Identifier)) {
-                children.push(this.parseBlock());
-            }
-            else {
-                throw this.error(this.peek(), "Expect attribute or nested block.");
-            }
-        }
-        this.consume(TokenType.CloseBrace, "Expect '}'");
-        return {
-            kind: "BlockExpression",
-            type,
-            identifier,
-            body: {
-                kind: "Block", type, identifier: identifier || "", attributes, children
-            }
-        };
     }
     parseReference() {
         const path = [];
-        path.push(this.consume(TokenType.Identifier, "Expect identifier.").value);
+        path.push(this.consume(TokenType.Identifier, "Expect identifier").value);
         while (this.match(TokenType.Dot)) {
-            path.push(this.consume(TokenType.Identifier, "Expect identifier after dot.").value);
+            if (this.check(TokenType.Identifier)) {
+                path.push(this.consume(TokenType.Identifier, "Expect identifier after dot").value);
+            }
+            else {
+                break;
+            }
         }
         return { kind: "Reference", path };
     }
     // Security validation
     validateNotCredential(value) {
-        // Check for common credential patterns
         const credentialPatterns = [
-            /^sk-/i, // OpenAI/Stripe style: sk-...
-            /^api_/i, // Common API key prefix
-            /^key_/i, // Common key prefix
-            /^secret_/i, // Common secret prefix
-            /^token_/i, // Common token prefix
-            /^Bearer /i, // Bearer tokens
-            /^[A-Za-z0-9_-]{32,}$/, // Long alphanumeric strings (likely keys)
+            /^sk-/i,
+            /^api_/i,
+            /^key_/i,
+            /^secret_/i,
+            /^token_/i,
+            /^Bearer /i,
+            /^[A-Za-z0-9_-]{32,}$/,
         ];
         for (const pattern of credentialPatterns) {
             if (pattern.test(value)) {
@@ -196,7 +435,7 @@ export class A22Parser {
             }
         }
     }
-    // Helpers
+    // Helper methods
     match(type) {
         if (this.check(type)) {
             this.advance();
@@ -209,11 +448,6 @@ export class A22Parser {
             return false;
         return this.peek().type === type;
     }
-    checkNext(type) {
-        if (this.current + 1 >= this.tokens.length)
-            return false;
-        return this.tokens[this.current + 1].type === type;
-    }
     advance() {
         if (!this.isAtEnd())
             this.current++;
@@ -223,7 +457,7 @@ export class A22Parser {
         return this.peek().type === TokenType.EOF;
     }
     peek() {
-        return this.tokens[this.current] || this.tokens[this.tokens.length - 1]; // Ensure we return EOF token if OoB
+        return this.tokens[this.current] || this.tokens[this.tokens.length - 1];
     }
     previous() {
         return this.tokens[this.current - 1] || this.tokens[0];
@@ -232,6 +466,21 @@ export class A22Parser {
         if (this.check(type))
             return this.advance();
         throw this.error(this.peek(), message);
+    }
+    consumeKeyword(message) {
+        if (this.check(TokenType.Keyword))
+            return this.advance();
+        throw this.error(this.peek(), message);
+    }
+    consumeNewline() {
+        while (this.match(TokenType.Newline)) {
+            // Consume all consecutive newlines
+        }
+    }
+    skipNewlines() {
+        while (this.match(TokenType.Newline)) {
+            // Skip newlines
+        }
     }
     error(token, message) {
         return new Error(`[line ${token.line}] Error at '${token.value}': ${message}`);

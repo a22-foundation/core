@@ -1,15 +1,36 @@
-var "model" {
-  default = "gpt-4"
-}
+# A22 Sample - Natural Language Syntax
 
-tool "web_search" {
-  source = "std/search"
-  inputs {
-    query = string
-  }
-}
+tool "web_search"
+	endpoint "https://api.search.com/v1/search"
+	runtime :http
 
-agent "researcher" {
-  model = "gpt-4"
-  tools = [tool.web_search]
-}
+	input
+		query: text
+		max_results: number
+
+	output
+		results: list
+
+agent "researcher"
+	can search, analyze, summarize
+	use model: :gpt4
+	use tools: [web_search]
+
+	prompt :system
+		"You are a research assistant that helps find and analyze information."
+
+	state :persistent
+		backend :memory
+		ttl 3600
+
+workflow "research_task"
+	steps
+		query = web_search
+			query: input.topic
+			max_results: 10
+
+		analysis = agent "researcher"
+			message: "Analyze these search results and provide a summary"
+			context: query.results
+
+		return analysis.content

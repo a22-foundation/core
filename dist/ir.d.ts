@@ -16,6 +16,10 @@ export interface A22IR {
     policies?: Policy[];
     templates?: Template[];
     configs?: Config[];
+    schedules?: Schedule[];
+    tests?: Test[];
+    imports?: Import[];
+    prompts?: Prompt[];
 }
 export interface Metadata {
     id?: string;
@@ -39,6 +43,8 @@ export interface Agent {
     policy?: string | Policy;
     isolation?: IsolationConfig;
     event_handlers?: EventHandler[];
+    state?: StateConfig;
+    remembers?: RemembersConfig;
 }
 export interface ModelConfig {
     provider: string;
@@ -102,15 +108,17 @@ export interface Flow {
 }
 export interface FlowStep {
     id: string;
-    kind: 'agent' | 'tool' | 'branch' | 'parallel' | 'subflow';
+    kind: 'agent' | 'tool' | 'branch' | 'parallel' | 'subflow' | 'loop' | 'human_in_loop';
     agent?: string;
     tool?: string;
     subflow?: string;
+    human_in_loop?: HumanInLoop;
     input_map?: Record<string, any>;
     output_map?: Record<string, any>;
     condition?: string;
     branches?: Branch[];
     parallel?: FlowStep[];
+    loop?: LoopConfig;
     retry?: RetryPolicy;
 }
 export interface Branch {
@@ -120,6 +128,11 @@ export interface Branch {
 export interface RetryPolicy {
     max_retries?: number;
     backoff?: 'none' | 'linear' | 'exponential';
+}
+export interface LoopConfig {
+    max?: number;
+    break_condition?: string;
+    steps: FlowStep[];
 }
 export interface ErrorBoundary {
     on_error?: 'retry' | 'skip' | 'stop' | 'handler';
@@ -274,4 +287,89 @@ export interface EventHandler {
     event: string;
     workflow?: string;
     tool?: string;
+}
+export interface StateConfig {
+    backend: 'memory' | 'redis' | 'postgres' | 'custom';
+    ttl?: number;
+    persist_to?: string;
+}
+export interface RemembersConfig {
+    [key: string]: RememberSpec;
+}
+export interface RememberSpec {
+    type: 'last' | 'always' | 'current_session';
+    count?: number;
+    unit?: string;
+}
+export interface HumanInLoop {
+    id: string;
+    name: string;
+    show?: any;
+    ask?: string;
+    options?: string[];
+    timeout?: number;
+    default?: string;
+    input_type?: string;
+    optional?: boolean;
+    stores_in?: string;
+}
+export interface Schedule {
+    id: string;
+    name: string;
+    trigger: ScheduleTrigger;
+    run: ScheduleAction;
+    with?: Record<string, any>;
+}
+export interface ScheduleTrigger {
+    type: 'interval' | 'cron' | 'event';
+    interval?: string;
+    cron?: string;
+    event?: string;
+}
+export interface ScheduleAction {
+    workflow?: string;
+    agent?: string;
+    tool?: string;
+}
+export interface Test {
+    id: string;
+    name: string;
+    given?: TestGiven;
+    when?: TestWhen;
+    expect?: TestExpect[];
+}
+export interface TestGiven {
+    [key: string]: any;
+}
+export interface TestWhen {
+    agent?: string;
+    tool?: string;
+    workflow?: string;
+    input?: any;
+}
+export interface TestExpect {
+    type: 'equals' | 'contains' | 'calls' | 'returns' | 'completes_within';
+    left?: any;
+    right?: any;
+    target?: string;
+    count?: number | 'once';
+    duration?: number;
+}
+export interface Import {
+    source: string;
+    items?: ImportItem[];
+}
+export interface ImportItem {
+    type: 'agent' | 'tool' | 'workflow' | 'policy' | 'capability';
+    name: string;
+    alias?: string;
+}
+export interface Prompt {
+    id: string;
+    name?: string;
+    content: string | ConditionalPrompt[];
+}
+export interface ConditionalPrompt {
+    when: string;
+    content: string;
 }
